@@ -127,3 +127,6 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+.idea/
+docs/~$Database20200924.xlsx
+/docs/~$Database.pptx

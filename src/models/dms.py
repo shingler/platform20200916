@@ -1,7 +1,11 @@
 #!/usr/bin/python
 # -*- coding:utf-8 -*-
 import datetime
+
+from sqlalchemy.orm import foreign, remote
+from src.models import splice_db_connect_string
 from src import db
+from sqlalchemy import and_, func
 
 
 class Company(db.Model):
@@ -33,7 +37,8 @@ class Company(db.Model):
     # NAV里的公司名称
     NAV_Company_Name = db.Column(db.String(100), nullable=True, default="", comment="NAV里的公司名称")
     # 最后修改时间
-    Last_Modified_DT = db.Column(db.DateTime, comment="最后修改时间")
+    Last_Modified_DT = db.Column(db.DateTime, server_default=datetime.datetime.now().isoformat(timespec="seconds"),
+                                 comment="最后修改时间")
     # 最后修改人
     Last_Modified_By = db.Column(db.String(20), nullable=False, comment="最后修改人")
     # NAV WEB Service用户ID
@@ -41,11 +46,17 @@ class Company(db.Model):
     # NAV WEB Service密码
     NAV_WEB_Password = db.Column(db.String(50), nullable=True, comment="NAV WEB Service密码")
 
+    # 返回NAV数据库连接字符串
+    def get_nav_connection_string(self, config):
+        return splice_db_connect_string(
+            db_engine=config["DATABASE_ENGINE"], db_port=config["DATABASE_PORT"], db_suffix=config["DATABASE_SUFFIX"],
+            db_user=self.NAV_DB_UserID, db_pwd=self.NAV_DB_Password, db_host=self.NAV_DB_Address, db_name=self.NAV_DB_Name)
+
 
 class ApiSetup(db.Model):
     __tablename__ = "DMS_API_Setup"
     # 公司代码(Link to table: DMS_Company_List)
-    Company_Code = db.Column(db.String(20), db.ForeignKey("DMS_Company_List.Code"), nullable=False, primary_key=True, comment="公司代码")
+    Company_Code = db.Column(db.String(20), nullable=False, primary_key=True, comment="公司代码")
     # 接口代码
     API_Code = db.Column(db.String(100), nullable=False, primary_key=True, comment="接口代码")
     # 接口名称
@@ -56,6 +67,8 @@ class ApiSetup(db.Model):
     API_Address1 = db.Column(db.String(500), nullable=False, comment="接口地址(主)")
     # 接口地址(备), 如果接口类型为2 - XML File, 该字段内容为XML文件的存储路径
     API_Address2 = db.Column(db.String(500), nullable=False, comment="接口地址(备)")
+    # 接口版本号
+    API_Version = db.Column(db.String(50), nullable=False, default="v1", comment="接口版本号")
     # 命令代码
     Command_Code = db.Column(db.String(20), nullable=True, comment="命令代码")
     # 数据格式(1 - JSON, 2 - XML)
@@ -66,6 +79,8 @@ class ApiSetup(db.Model):
     Signature_Method = db.Column(db.String(50), nullable=True, comment="签名方法")
     # 签名信息
     Signature = db.Column(db.String(200), nullable=True, comment="签名信息")
+    # 密钥
+    Secret_Key = db.Column(db.Text, nullable=True, default="", comment="密钥")
     # 启用接口
     Activated = db.Column(db.Boolean, nullable=False, default=False, comment="启用接口")
     # 如果接口类型为2 - XML File, 该字段内容为XML文件名的格式(e.g.YYYYMMDD_CustVendInfo.XML)
@@ -74,18 +89,27 @@ class ApiSetup(db.Model):
     Notification_Activated = db.Column(db.Boolean, nullable=False, default=False, comment="启用邮件提醒")
     # 回调地址
     CallBack_Address = db.Column(db.String(200), nullable=True, comment="回调地址")
+    CallBack_SoapAction = db.Column(db.String(50), nullable=False, default="DMSDataInterfaceIn")
+    # 回调命令代码(01-CustVendInfo,02-FA,03-Invoice,04-Other)
+    CallBack_Command_Code = db.Column(db.String(50), nullable=False, default="01", comment="回调命令代码(01-CustVendInfo,02-FA,03-Invoice,04-Other)")
     # 超时时间(单位: 分钟)
     Time_out = db.Column(db.Integer, nullable=False, default=0, comment="超时时间(单位: 分钟)")
     # XML文件最大容量(单位: M兆)
     File_Max_Size = db.Column(db.Integer, nullable=False, default=0, comment="XML文件最大容量(单位: M兆)")
     # 最后修改时间
-    Last_Modified_DT = db.Column(db.DateTime, nullable=True, default=datetime.datetime.now, comment="最后修改时间")
+    Last_Modified_DT = db.Column(db.DateTime, nullable=True,
+                                 server_default=datetime.datetime.now().isoformat(timespec="seconds"), comment="最后修改时间")
     # 最后修改人
     Last_Modified_By = db.Column(db.String(20), nullable=True, comment="最后修改人")
     # XML文件成功导入后的归档地址
     Archived_Path = db.Column(db.String(500), nullable=True, comment="XML文件成功导入后的归档地址")
 
-    company = db.relationship("Company", backref="ApiSetup")
+    company = db.relationship("Company", backref="ApiSetup",
+                              primaryjoin=foreign(Company_Code) == remote(Company.Code))
+
+    def __repr__(self):
+        return "Company_Code: %s, API_Code: %s, API_Type: %d, API_Address1: %s" % \
+               (self.Company_Code, self.API_Code, self.API_Type, self.API_Address1)
 
 
 class ApiPInSetup(db.Model):
@@ -111,11 +135,9 @@ class ApiPInSetup(db.Model):
     # 最后修改人
     Last_Modified_By = db.Column(db.String(20), nullable=False, comment="最后修改人")
 
-    # __table_args__ = (
-    #     ForeignKeyConstraint(["Company_Code", "API_Code"], ["DMS_API_Setup.Company_Code", "DMS_API_Setup.API_Code"])
-    # )
-    apiSetup = db.relationship("ApiSetup", primaryjoin="(DMS_API_P_In_Setup.Company_Code == DMS_API_Setup.Company_Code) \
-                && (DMS_API_P_In_Setup.API_Code == DMS_API_Setup.API_Code)")
+    apiSetup = db.relationship("ApiSetup",
+                               primaryjoin=and_((foreign(Company_Code) == remote(ApiSetup.Company_Code)),
+                                                (foreign(API_Code) == remote(ApiSetup.API_Code))))
 
 
 class ApiPOutSetup(db.Model):
@@ -144,9 +166,16 @@ class ApiPOutSetup(db.Model):
     Last_Modified_DT = db.Column(db.DateTime, nullable=False, comment="最后修改时间")
     # 最后修改人
     Last_Modified_By = db.Column(db.String(20), nullable=False, comment="最后修改人")
+    # 内容长度
+    Value_Length = db.Column(db.Integer, nullable=True)
 
-    apiSetup = db.relationship("ApiSetup", primaryjoin="(DMS_API_P_Out_Setup.Company_Code == DMS_API_Setup.Company_Code) \
-                    && (DMS_API_P_Out_Setup.API_Code == DMS_API_Setup.API_Code)")
+    apiSetup = db.relationship("ApiSetup",
+                               primaryjoin=and_((foreign(Company_Code) == remote(ApiSetup.Company_Code)),
+                                                (foreign(API_Code) == remote(ApiSetup.API_Code))))
+
+    def __repr__(self):
+        return "<Sequence=%d, P_Name=%s, Level=%d, Parent_Node_Name=%s, Value_Type=%d>" \
+               % (self.Sequence, self.P_Name, self.Level, self.Parent_Node_Name, self.Value_Type)
 
 
 class NotificationUser(db.Model):
@@ -164,7 +193,7 @@ class NotificationUser(db.Model):
     # 最后修改人
     Last_Modified_By = db.Column(db.String(20), nullable=False, comment="最后修改人")
 
-    company = db.relationship("Company", backref="notificationUser")
+    company = db.relationship("Company", primaryjoin=foreign(Company_Code) == remote(Company.DMS_Company_Code), backref="notificationUser")
 
 
 class ApiTaskSetup(db.Model):
@@ -189,5 +218,11 @@ class ApiTaskSetup(db.Model):
     Recurrence_Day = db.Column(db.Integer, nullable=False, comment="重复时间间隔（每天，每2天，每7天等等，e.g. 值为3, 意思是每3天执行一次）")
     # 上次成功执行时间
     Last_Executed_Time = db.Column(db.DateTime, nullable=False, comment="上次成功执行时间")
+    # 启用任务(1-是,0-否)
+    Activated = db.Column(db.Integer, default=1)
 
-    setup = db.relationship("ApiSetup", backref="task")
+    setup = db.relationship("ApiSetup", primaryjoin=foreign(Company_Code) == remote(ApiSetup.Company_Code), backref="task")
+
+    def __repr__(self):
+        return "%s<Company_Code=%s, Sequence=%d, Task_Name=%s, API_Code=%s, Fail_Handle=%d>" \
+               % (self.__class__, self.Company_Code, self.Sequence, self.Task_Name, self.API_Code, self.Fail_Handle)
